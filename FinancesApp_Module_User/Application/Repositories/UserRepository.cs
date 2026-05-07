@@ -19,10 +19,10 @@ public class UserRepository : IUserRepository
                                             CancellationToken token = default)
     {
         const string InsertCommandText = @"INSERT INTO [FinanceApp].[dbo].[Users] 
-                                            (Id, Name, Email, RegisteredAt, ModifiedAt, DateOfBirth, ProfileImage)
+                                            (Id, Name, Email, RegisteredAt, ModifiedAt, DateOfBirth)
                                             OUTPUT INSERTED.Id
                                             VALUES 
-                                            (@Id, @Name, @Email, @RegisteredAt, @ModifiedAt, @DateOfBirth, @ProfileImage)";
+                                            (@Id, @Name, @Email, @RegisteredAt, @ModifiedAt, @DateOfBirth)";
         var parameters = new Dictionary<string, object>
         {
             { "@Id", user.Id },
@@ -30,8 +30,7 @@ public class UserRepository : IUserRepository
             { "@Email", user.Email },
             { "@RegisteredAt", user.RegisteredAt },
             { "@ModifiedAt", user.ModifiedAt },
-            { "@DateOfBirth", user.DateOfBirth },
-            { "@ProfileImage", user.ProfileImage }
+            { "@DateOfBirth", user.DateOfBirth }
         };
 
         var userId = await _commandFactory.ExecuteAsync(
@@ -57,11 +56,9 @@ public class UserRepository : IUserRepository
                                             CancellationToken token = default)
     {
         const string UpdateCommandText = @"UPDATE [FinanceApp].[dbo].[Users]
-                                           SET Name = @Name,
-                                               Email = @Email,
-                                               ModifiedAt = @ModifiedAt,
-                                               DateOfBirth = @DateOfBirth,
-                                               ProfileImage = @ProfileImage
+                                           SET Name = COALESCE(NULLIF(@Name, ''), Name),
+                                               Email = COALESCE(NULLIF(@Email, ''), Email),
+                                               ModifiedAt = @ModifiedAt
                                            WHERE Id = @Id";
 
         var parameters = new Dictionary<string, object>
@@ -70,8 +67,6 @@ public class UserRepository : IUserRepository
             { "@Name", user.Name },
             { "@Email", user.Email },
             { "@ModifiedAt", user.ModifiedAt },
-            { "@DateOfBirth", user.DateOfBirth },
-            { "@ProfileImage", user.ProfileImage }
         };
 
         var rowsAffected = await _commandFactory.ExecuteAsync(
@@ -84,6 +79,38 @@ public class UserRepository : IUserRepository
             token);
 
         return rowsAffected > 0;
+    }
+
+    public async Task<bool> UpdateProfileImageAsync(Guid userId,
+                                                    string s3Key,
+                                                    SqlConnection? connection = null,
+                                                    CancellationToken token = default)
+    {
+        const string UpdateCommandText = @"UPDATE [FinanceApp].[dbo].[Users]
+                                           SET ProfileImage = @ProfileImage
+                                           WHERE Id = @Id";
+        try
+        {
+            var rowsAffected = await _commandFactory.ExecuteAsync(
+            commandText: UpdateCommandText,
+            options: new CreateSqlCommandOptions
+            {
+                Parameters =
+                [
+                    new("@Id", System.Data.SqlDbType.UniqueIdentifier) { Value = userId },
+                    new("@ProfileImage", System.Data.SqlDbType.NVarChar) { Value =  s3Key }
+                ]
+            },
+            operation: async command => await command.ExecuteNonQueryAsync(token),
+            token);
+            return rowsAffected > 0;
+
+        }
+        catch (Exception ex)
+        {
+            throw;
+        }
+
     }
 
     public async Task<bool> DeleteUserAsync(Guid userId,

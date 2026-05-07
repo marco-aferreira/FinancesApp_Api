@@ -22,6 +22,8 @@
 
   <ItemGroup>
     <None Remove="CLAUDE.md" />
+    <None Remove="FinancesApp_API_Frontend_Guide.pdf" />
+    <None Remove="LinkedIn_Topics.pdf" />
   </ItemGroup>
 
   <ItemGroup>

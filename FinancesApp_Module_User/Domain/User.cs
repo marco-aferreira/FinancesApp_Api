@@ -77,13 +77,13 @@ public class User : AggregateRoot
     public User(Guid id,
                 string name,
                 string email,
-                DateTimeOffset dateOfBirth,
+                DateTimeOffset? dateOfBirth,
                 string profileImage)
     {
         Id = id;
         Name = name;
         Email = email;
-        DateOfBirth = dateOfBirth;
+        DateOfBirth = dateOfBirth??=DateTimeOffset.MinValue;
         ProfileImage = profileImage;
         ModifiedAt = DateTimeOffset.Now;
 
@@ -102,6 +102,11 @@ public class User : AggregateRoot
     public void Delete()
     {
         Raise(new UserDeletedEvent(Guid.NewGuid(), DateTimeOffset.UtcNow, Id));
+    }
+
+    public void UpdateProfileImage(string s3Key)
+    {
+        Raise(new UserProfileImageUpdatedEvent(Guid.NewGuid(), DateTimeOffset.UtcNow, Id, s3Key));
     }
 
     public override void RebuildFromEvents(List<IDomainEvent> events)
@@ -127,15 +132,20 @@ public class User : AggregateRoot
                 break;
 
             case UserUpdatedEvent e:
+                Id = e.Id;
                 Name = e.Name;
-                Email = e.Email;
-                DateOfBirth = e.DateOfBirth;
                 ProfileImage = e.ProfileImage;
                 ModifiedAt = e.Timestamp;
                 break;
 
             case UserDeletedEvent:
                 IsDeleted = true;
+                break;
+
+            case UserProfileImageUpdatedEvent e:
+                Id = e.UserId;
+                ProfileImage = e.S3Key;
+                ModifiedAt = e.Timestamp;
                 break;
 
             default:

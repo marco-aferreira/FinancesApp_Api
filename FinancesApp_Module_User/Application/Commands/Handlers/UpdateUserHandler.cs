@@ -1,13 +1,17 @@
 using FinancesApp_CQRS.Interfaces;
+using FinancesApp_Module_User.Application.Services;
 using Microsoft.Extensions.Logging;
 using Prometheus;
+using System.Threading.Channels;
 
 namespace FinancesApp_Module_User.Application.Commands.Handlers;
 
 public class UpdateUserHandler(IEventStore eventStore,
+                               ChannelWriter<ImageUploadJob> imageChannel,
                                ILogger<UpdateUserHandler> logger) : ICommandHandler<UpdateUser, bool>
 {
     private readonly IEventStore _eventStore = eventStore;
+    private readonly ChannelWriter<ImageUploadJob> _imageChannel = imageChannel;
     private readonly ILogger<UpdateUserHandler> _logger = logger;
 
     private static readonly Counter UsersUpdated = Metrics
@@ -39,6 +43,9 @@ public class UpdateUserHandler(IEventStore eventStore,
                 await _eventStore.Append(user.Id, user.GetUncommittedEvents(), existing.NextVersion, cancellationToken);
 
                 UsersUpdated.Inc();
+
+                if (command.ImageData is not null && command.ContentType is not null)
+                    _imageChannel.TryWrite(new ImageUploadJob(user.Id, command.ImageData, command.ContentType));
 
                 _logger.LogInformation(
                     "User updated successfully - ID: {UserId}, Name: {Name}, Email: {Email}, ModifiedAt: {ModifiedAt}, DateOfBirth: {DateOfBirth}, ProfileImage: {ProfileImage}",

@@ -2,14 +2,15 @@
 
 namespace FinancesApp_Api.Contracts.Requests.UserRequests;
 
-public record UpdateUserRequest(Guid Id, DateTimeOffset DateOfBirth)
-{
-    public string Name { get; set; } = "";
-    public string Email { get; set; } = "";
-    public string ProfileImage { get; set; } = "";
+public record UpdateUserRequest(Guid Id,
+                                string Name, 
+                                string Email, 
+                                string ProfileImage)
 
+{
+   
     internal User MapToUser()
     {
-        return new User(Id, Name, Email, DateOfBirth, ProfileImage);
+        return new User(Id, Name, Email, null, ProfileImage);
     }
 }

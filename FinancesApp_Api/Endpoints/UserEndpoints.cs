@@ -16,6 +16,6 @@ public static class UserEndpoints
 
     public const string Create = $"{Base}/create";
 
-    public const string Update = $"{Base}/update/{{userId}}";
+    public const string Update = $"{Base}/update/";
 
 }

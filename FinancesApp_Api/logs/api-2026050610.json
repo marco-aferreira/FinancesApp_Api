@@ -1,0 +1,2 @@
+{"@t":"2026-05-06T13:27:21.8982156Z","@mt":"HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms","@r":["264.1561"],"@tr":"a9c9d2cbefbffb2bd4ad7c778e666efc","@sp":"230bc2d83e6b4df6","RequestMethod":"GET","RequestPath":"/api/v1/user","StatusCode":200,"Elapsed":264.1561,"SourceContext":"Serilog.AspNetCore.RequestLoggingMiddleware","RequestId":"0HNLBEBIEVA4D:00000004","ConnectionId":"0HNLBEBIEVA4D"}
+,
