@@ -1,13 +1,17 @@
 using FinancesApp_CQRS.Interfaces;
+using FinancesApp_Module_User.Application.Services;
 using Microsoft.Extensions.Logging;
 using Prometheus;
+using System.Threading.Channels;
 
 namespace FinancesApp_Module_User.Application.Commands.Handlers;
 
 public class CreateUserHandler(IEventStore eventStore,
+                               ChannelWriter<ImageUploadJob> imageChannel,
                                ILogger<CreateUserHandler> logger) : ICommandHandler<CreateUser, Guid>
 {
     private readonly IEventStore _eventStore = eventStore;
+    private readonly ChannelWriter<ImageUploadJob> _imageChannel = imageChannel;
     private readonly ILogger<CreateUserHandler> _logger = logger;
 
     private static readonly Counter UsersCreated = Metrics
@@ -35,6 +39,9 @@ public class CreateUserHandler(IEventStore eventStore,
                 await _eventStore.Append(user.Id, user.GetUncommittedEvents(), user.CurrentVersion, cancellationToken);
 
                 UsersCreated.Inc();
+
+                if (command.ImageData is not null && command.ContentType is not null)
+                    _imageChannel.TryWrite(new ImageUploadJob(user.Id, command.ImageData, command.ContentType));
 
                 _logger.LogInformation(
                     "User created successfully - ID: {UserId}, Name: {Name}, Email: {Email}, RegisteredAt: {RegisteredAt}, ProfileImage: {ProfileImage}",

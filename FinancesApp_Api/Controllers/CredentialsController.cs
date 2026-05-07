@@ -13,18 +13,21 @@ using FinancesApp_Module_Credentials.Application.Commands;
 using FinancesApp_Module_Credentials.Application.Queries;
 using FinancesApp_Module_Credentials.Domain;
 using FinancesApp_Module_User.Application.Queries;
+using FinancesApp_Module_User.Application.Services;
 using FinancesApp_Module_User.Domain;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using FinancesApp_Module_User.Application.Queries.Handlers;
 
 namespace FinancesApp_Api.Controllers;
 
 [ApiController]
 [ApiVersion(ApiVersions.V1)]
 [ApiVersion(ApiVersions.V1_1)]
-public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId, UserCredentials> getByUserIdHandler,
-                                       IQueryHandler<GetUserCredentialsByLogin, UserCredentials> getByLoginHandler,
+public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId, UserCredentials> getCredentialsByUserIdHandler,
+                                       IQueryHandler<GetUserCredentialsByLogin, UserCredentials> getCredentialsByLoginHandler,
                                        IQueryHandler<GetUserByEmail, User> getUserByEmailHandler,
+                                       IQueryHandler<GetUserById, User> getUserByIdHandler,
                                        IQueryHandler<GetAccounts, IReadOnlyList<Account>> getAccountsHandler,
                                        IQueryHandler<GetActiveUserTotp, UserCredentialsTotp?> getActiveTotpHandler,
                                        ICommandHandler<RegisterUserCredentials, Guid> createCredentialsHandler,
@@ -34,7 +37,8 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
                                        ICommandHandler<InvalidateTotpCredential, bool> invalidateTotpHandler,
                                        ICommandHandler<RebuildCredentialsProjection, bool> rebuildProjectionHandler,
                                        TotpService totpService,
-                                       TotpValidator totpValidator) : ControllerBase
+                                       TotpValidator totpValidator,
+                                       IS3ImageService s3ImageService) : ControllerBase
 {
 
     [HttpGet(CredentialsEndpoints.GetByUserId)]
@@ -48,7 +52,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
             UserId = userGuid
         };
 
-        var result = await getByUserIdHandler.Handle(query, token);
+        var result = await getCredentialsByUserIdHandler.Handle(query, token);
 
         if (result is null)
             return NotFound();
@@ -66,7 +70,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
             Login = login
         };
 
-        var result = await getByLoginHandler.Handle(query, token);
+        var result = await getCredentialsByLoginHandler.Handle(query, token);
 
         if (result is null)
             return NotFound();
@@ -87,7 +91,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
             Password = request.PlainPassword
         };
 
-        var credentials = await getByLoginHandler.Handle(query, token);
+        var credentials = await getCredentialsByLoginHandler.Handle(query, token);
 
         if (credentials is null || credentials.Id == Guid.Empty)
             return Unauthorized();
@@ -127,7 +131,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         await invalidateTotpHandler.Handle(new InvalidateTotpCredential(validation.TotpId), token);
 
         var credentialsQuery = new GetUserCredentialsByUserId { UserId = validation.UserId };
-        var credentials = await getByUserIdHandler.Handle(credentialsQuery, token);
+        var credentials = await getCredentialsByUserIdHandler.Handle(credentialsQuery, token);
 
         if (credentials is null || credentials.Id == Guid.Empty)
             return NotFound("User credentials not found");
@@ -140,21 +144,20 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
             .Select(a => a.Id)
             .ToList();
 
-        JwtService jwtService = new();
-        var fullToken = await jwtService.GenerateFullToken(new GenerateFullJwtRequest
-        {
-            UserId = validation.UserId,
-            Login = credentials.Email,
-            AccountIds = userAccountIds,
-            CustomClaims = new Dictionary<string, object>
-            {
-                { "role", "user" },
-                { "2fa_verified", true }
-            }
-        }, token);
+        var userQuery = new GetUserById { UserId = credentials.UserId};
+        var user = await getUserByIdHandler.Handle(userQuery, token);
 
-        return Ok(new { Token = fullToken, TokenType = "full" });
+        string? profileImageUrl = null;
+
+        if (!string.IsNullOrEmpty(user?.ProfileImage))
+            profileImageUrl = await s3ImageService.GeneratePresignedUrlAsync(user.ProfileImage, token);
+        
+        string fullToken = await GetUserFullAccessToken(validation, credentials, userAccountIds, token);
+
+        return Ok(new { Token = fullToken, TokenType = "full", ProfileImageUrl = profileImageUrl });
     }
+
+   
 
     [HttpPost(CredentialsEndpoints.CreateCredentials)]
     public async Task<IActionResult> CreateCredentials([FromBody] CreateCredentialsRequest request,
@@ -224,6 +227,26 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
             return BadRequest("Failed to rebuild projection. Check if events exist for this user.");
 
         return Ok($"Projection rebuilt for user {userGuid}");
+    }
+
+    private static async Task<string> GetUserFullAccessToken(TotpValidationResult validation,
+                                                             UserCredentials credentials,
+                                                             List<Guid> userAccountIds,
+                                                             CancellationToken token)
+    {
+        JwtService jwtService = new();
+
+        return await jwtService.GenerateFullToken(new GenerateFullJwtRequest
+        {
+            UserId = validation.UserId,
+            Login = credentials.Email,
+            AccountIds = userAccountIds,
+            CustomClaims = new Dictionary<string, object>
+            {
+                { "role", "user" },
+                { "2fa_verified", true }
+            }
+        }, token);
     }
 
     private static IActionResult MapValidationResult(TotpValidationResult result) => result.Status switch

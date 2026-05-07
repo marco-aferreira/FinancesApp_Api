@@ -1,10 +1,13 @@
 using FinancesApp_CQRS.Interfaces;
+using System.Text.Json.Serialization;
 
 namespace FinancesApp_Module_Credentials.Domain;
 public abstract class AggregateRoot
 {
     private readonly List<IDomainEvent> _uncommittedEvents = [];
+    [JsonIgnore]
     public int NextVersion { get; private set; }
+    [JsonIgnore]
     public int CurrentVersion { get; private set; }
 
     protected void Raise(IDomainEvent evt)

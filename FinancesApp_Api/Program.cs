@@ -41,7 +41,9 @@ try
             name: "SQL Database Check",
             failureStatus: HealthStatus.Unhealthy,
             tags: ["database", "critical"]
-        );
+        )
+        .AddCheck<S3HealthCheck>("S3 Bucket Check", tags: ["aws", "storage"])
+        .AddCheck<DynamoHealthCheck>("DynamoDB Check", tags: ["aws", "storage"]);
 
     builder.Services.AddJwtServices(config);
 
@@ -82,8 +84,10 @@ try
 
     builder.Services.AddCorsPolicies();
 
+    builder.Services.AddAwsServices(config);
+
     builder.Services.AddAccountModule();
-    builder.Services.AddUserModule();
+    builder.Services.AddUserModule(config);
     builder.Services.AddCredentialsModule();
 
     var app = builder.Build();
