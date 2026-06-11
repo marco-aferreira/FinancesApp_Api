@@ -2,9 +2,9 @@ using FinancesApp_Module_Credentials.Domain;
 
 namespace FinancesApp_Api.Jwt;
 
-public class JwtService
+public class JwtService(HttpClient httpClient)
 {
-    private static readonly Uri TokenEndpoint = new("http://localhost:5002/token");
+    private const string TokenEndpoint = "/token";
 
     public async Task<string> GeneratePartialToken(UserCredentials credentials,
                                                    CancellationToken token = default)
@@ -41,11 +41,10 @@ public class JwtService
         return await PostTokenRequest(request, token);
     }
 
-    private static async Task<string> PostTokenRequest(object request, CancellationToken token)
+    private async Task<string> PostTokenRequest(object request, CancellationToken token)
     {
-        using HttpClient client = new();
-        var response = await client.PostAsJsonAsync(TokenEndpoint, request, token);
-        response.EnsureSuccessStatusCode(); 
+        var response = await httpClient.PostAsJsonAsync(TokenEndpoint, request, token);
+        response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(token);
     }
 }

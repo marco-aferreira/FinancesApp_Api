@@ -1,5 +1,4 @@
 using Asp.Versioning;
-using Microsoft.AspNetCore.RateLimiting;
 using FinancesApp_Api.Contracts.Requests.CredentialsRequests;
 using FinancesApp_Api.Contracts.Responses.CredentialsResponses;
 using FinancesApp_Api.Endpoints;
@@ -13,17 +12,20 @@ using FinancesApp_Module_Credentials.Application.Commands;
 using FinancesApp_Module_Credentials.Application.Queries;
 using FinancesApp_Module_Credentials.Domain;
 using FinancesApp_Module_User.Application.Queries;
+using FinancesApp_Module_User.Application.Queries.Handlers;
 using FinancesApp_Module_User.Application.Services;
 using FinancesApp_Module_User.Domain;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using FinancesApp_Module_User.Application.Queries.Handlers;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Identity.Client;
 
 namespace FinancesApp_Api.Controllers;
 
 [ApiController]
 [ApiVersion(ApiVersions.V1)]
 [ApiVersion(ApiVersions.V1_1)]
+[Authorize]
 public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId, UserCredentials> getCredentialsByUserIdHandler,
                                        IQueryHandler<GetUserCredentialsByLogin, UserCredentials> getCredentialsByLoginHandler,
                                        IQueryHandler<GetUserByEmail, User> getUserByEmailHandler,
@@ -39,7 +41,8 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
                                        ICommandHandler<RebuildCredentialsProjection, bool> rebuildProjectionHandler,
                                        TotpService totpService,
                                        TotpValidator totpValidator,
-                                       IConfiguration configuration,
+                                       JwtClaimsDecryptor jwtDecryptor,
+                                       JwtService jwtService,
                                        IS3ImageService s3ImageService) : ControllerBase
 {
 
@@ -80,14 +83,12 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
 
         return Ok(result);
     }
-
+    [AllowAnonymous]
     [EnableRateLimiting(RateLimitingInjections.AuthPolicy)]
     [HttpPost(CredentialsEndpoints.Login)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request,
                                            CancellationToken token = default)
     {
-        JwtService jwtService = new();
-
         var query = new GetUserCredentialsByLogin
         {
             Login = request.Login,
@@ -120,7 +121,6 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         );
     }
 
-    [Authorize]
     [EnableRateLimiting(RateLimitingInjections.VerifyTotpPolicy)]
     [HttpPost(CredentialsEndpoints.VerifyTwoFactor)]
     public async Task<IActionResult> VerifyTwoFactor([FromBody] VerifyTwoFactorRequest request,
@@ -171,23 +171,15 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
 
         return Ok(new { ProfileImageUrl = profileImageUrl });
     }
-
-    [Authorize]
+  
     [HttpPost(CredentialsEndpoints.Logout)]
     public async Task<IActionResult> Logout(CancellationToken token = default)
     {
-        var encryptedUserId = User.FindFirst("userid_enc")?.Value;
-        if (string.IsNullOrEmpty(encryptedUserId))
-            return Unauthorized("Invalid token: missing user identity.");
+        var jwt = jwtDecryptor.Decrypt(User);
+        if (!jwt.IsValid)
+            return jwt.ToUnauthorizedResult();
 
-        var encryptionKey = configuration["ClaimEncryptionKey"]
-            ?? throw new InvalidOperationException("ClaimEncryptionKey not found in configuration.");
-
-        var decryptedUserId = ClaimEncryption.Decrypt(encryptedUserId, encryptionKey);
-        if (!Guid.TryParse(decryptedUserId, out var userGuid))
-            return BadRequest("Invalid UserId in token.");
-
-        await logoutHandler.Handle(new LogoutUser(userGuid), token);
+        await logoutHandler.Handle(new LogoutUser(jwt.UserId), token);
 
         var expiredCookie = new CookieOptions
         {
@@ -202,7 +194,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
 
         return Ok();
     }
-
+    [AllowAnonymous]
     [HttpPost(CredentialsEndpoints.CreateCredentials)]
     public async Task<IActionResult> CreateCredentials([FromBody] CreateCredentialsRequest request,
                                                         CancellationToken token = default)
@@ -234,6 +226,11 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         if (!Guid.TryParse(request.UserId, out var userGuid))
             return BadRequest("Invalid Id");
 
+        var jwtToken = jwtDecryptor.Decrypt(User, requiredTokenType: "full");
+
+        if (jwtToken.UserId != userGuid)
+            return Unauthorized();
+
         var command = new UpdateUserCredentials(userGuid, request.NewPlainPassword);
         var result = await updateCredentialsHandler.Handle(command, token);
 
@@ -249,6 +246,11 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         if (!Guid.TryParse(userId, out var userGuid))
             return BadRequest("Invalid Id");
 
+        var jwtToken = jwtDecryptor.Decrypt(User, requiredTokenType: "full");
+
+        if (jwtToken.UserId != userGuid)
+            return Unauthorized();
+
         var command = new DeleteUserCredentials(userGuid);
         var result = await deleteCredentialsHandler.Handle(command, token);
 
@@ -258,28 +260,26 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         return Ok("Credentials deleted successfully");
     }
 
-    [HttpPost(CredentialsEndpoints.RebuildProjection)]
-    public async Task<IActionResult> RebuildProjection([FromRoute] string userId, CancellationToken token = default)
+    //[HttpPost(CredentialsEndpoints.RebuildProjection)]
+    //public async Task<IActionResult> RebuildProjection([FromRoute] string userId, CancellationToken token = default)
+    //{
+    //    if (!Guid.TryParse(userId, out var userGuid))
+    //        return BadRequest("Invalid Id");
+
+    //    var command = new RebuildCredentialsProjection(userGuid);
+    //    var result = await rebuildProjectionHandler.Handle(command, token);
+
+    //    if (!result)
+    //        return BadRequest("Failed to rebuild projection. Check if events exist for this user.");
+
+    //    return Ok($"Projection rebuilt for user {userGuid}");
+    //}
+
+    private async Task<string> GetUserFullAccessToken(TotpValidationResult validation,
+                                                      UserCredentials credentials,
+                                                      List<Guid> userAccountIds,
+                                                      CancellationToken token)
     {
-        if (!Guid.TryParse(userId, out var userGuid))
-            return BadRequest("Invalid Id");
-
-        var command = new RebuildCredentialsProjection(userGuid);
-        var result = await rebuildProjectionHandler.Handle(command, token);
-
-        if (!result)
-            return BadRequest("Failed to rebuild projection. Check if events exist for this user.");
-
-        return Ok($"Projection rebuilt for user {userGuid}");
-    }
-
-    private static async Task<string> GetUserFullAccessToken(TotpValidationResult validation,
-                                                             UserCredentials credentials,
-                                                             List<Guid> userAccountIds,
-                                                             CancellationToken token)
-    {
-        JwtService jwtService = new();
-
         return await jwtService.GenerateFullToken(new GenerateFullJwtRequest
         {
             UserId = validation.UserId,

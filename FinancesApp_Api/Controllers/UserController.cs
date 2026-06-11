@@ -1,12 +1,13 @@
 ﻿using Asp.Versioning;
-using FinancesApp_Api.Contracts.Requests.UserRequests;
 using FinancesApp_Api.Endpoints;
+using FinancesApp_Api.Jwt;
 using FinancesApp_Api.StartUp;
 using FinancesApp_CQRS.Interfaces;
 using FinancesApp_Module_User.Application.Commands;
 using FinancesApp_Module_User.Application.Queries;
 using FinancesApp_Module_User.Application.Services;
 using FinancesApp_Module_User.Domain;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Buffers.Text;
 
@@ -15,40 +16,25 @@ namespace FinancesApp_Api.Contracts.Requests.UserRequests;
 [ApiController]
 [ApiVersion(ApiVersions.V1)]
 [ApiVersion(ApiVersions.V1_1)]
-public partial class UserController : ControllerBase
+[Authorize]
+public partial class UserController(IQueryHandler<GetUsers,
+                      IReadOnlyList<User>> getUsersHandler,
+                      IQueryHandler<GetUserById, User> getUserByIdHandler,
+                      ICommandHandler<CreateUser, Guid> createUserHandler,
+                      ICommandHandler<UpdateUser, bool> updateUserHandler,
+                      IS3ImageService s3ImageService,
+                      JwtClaimsDecryptor jwtDecryptor) : ControllerBase
 {
-    private readonly ILogger<UserController> _logger;
-    private readonly IQueryHandler<GetUsers, IReadOnlyList<User>> _getUsersHandler;
-    private readonly IQueryHandler<GetUserById, User> _getUserByIdHandler;
-    private readonly ICommandHandler<CreateUser, Guid> _createUserHandler;
-    private readonly ICommandHandler<UpdateUser, bool> _updateUserHandler;
-    private readonly IS3ImageService _s3ImageService;
-
-    public UserController(IQueryHandler<GetUsers,
-                          IReadOnlyList<User>> getUsersHandler,
-                          ILogger<UserController> logger,
-                          IQueryHandler<GetUserById, User> getUserByIdHandler,
-                          ICommandHandler<CreateUser, Guid> createUserHandler,
-                          ICommandHandler<UpdateUser, bool> updateUserHandler,
-                          IS3ImageService s3ImageService)
-    {
-        _getUsersHandler = getUsersHandler;
-        _logger = logger;
-        _getUserByIdHandler = getUserByIdHandler;
-        _createUserHandler = createUserHandler;
-        _updateUserHandler = updateUserHandler;
-        _s3ImageService = s3ImageService;
-    }
 
     [HttpGet(UserEndpoints.GetAll)]
     public async Task<IActionResult> GetUsers(CancellationToken token = default)
     {
         var query = new GetUsers();
-        var result = await _getUsersHandler.Handle(query, token);
+        var result = await getUsersHandler.Handle(query, token);
 
         return Ok(result);
     }
-
+    
     [HttpGet(UserEndpoints.Get)]
     public async Task<IActionResult> GetById([FromRoute] string userId,
                                              CancellationToken token = default)
@@ -57,12 +43,17 @@ public partial class UserController : ControllerBase
         if (!Guid.TryParse(userId, out var userGuid))
             return BadRequest("Invalid Id");
 
+        var jwtToken = jwtDecryptor.Decrypt(User);
+
+        if (jwtToken.UserId != userGuid)
+            return Unauthorized();
+
         var query = new GetUserById()
         {
             UserId = userGuid
         };
 
-        var result = await _getUserByIdHandler.Handle(query, token);
+        var result = await getUserByIdHandler.Handle(query, token);
 
         if (result.Id == Guid.Empty)
             return NotFound();
@@ -70,18 +61,19 @@ public partial class UserController : ControllerBase
         string? profileImageUrl = null;
 
         if (!string.IsNullOrEmpty(result.ProfileImage))
-            profileImageUrl = await _s3ImageService.GeneratePresignedUrlAsync(result.ProfileImage, token);
+            profileImageUrl = await s3ImageService.GeneratePresignedUrlAsync(result.ProfileImage, token);
 
         return Ok(new { User = result, ProfileImageUrl = profileImageUrl });
     }
 
+    [AllowAnonymous]
     [HttpPost(UserEndpoints.Create)]
     public async Task<IActionResult> Create([FromBody] CreateUserRequest request,
                                             CancellationToken token = default)
     {
         var command = new CreateUser(request.MapToUser());  
 
-        var result = await _createUserHandler.Handle(command, token);
+        var result = await createUserHandler.Handle(command, token);
 
         return result == Guid.Empty ? BadRequest() : Ok(result);
 
@@ -93,8 +85,13 @@ public partial class UserController : ControllerBase
     {
         byte[]? imageData = null;
         string? contentType = null;
+        
+        var jwtToken = jwtDecryptor.Decrypt(User);
 
-        if(!string.IsNullOrEmpty(request.ProfileImage) 
+        if (jwtToken.UserId != request.Id)
+            return Unauthorized();
+
+        if (!string.IsNullOrEmpty(request.ProfileImage) 
                && Base64.IsValid(request.ProfileImage))
         {
             imageData = Convert.FromBase64String(request.ProfileImage);
@@ -105,7 +102,7 @@ public partial class UserController : ControllerBase
                                      imageData, 
                                      contentType);
 
-        var result = await _updateUserHandler.Handle(command, token);
+        var result = await updateUserHandler.Handle(command, token);
 
         return result ? Ok(request.Id) : BadRequest();
     }

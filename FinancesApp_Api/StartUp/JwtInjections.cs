@@ -9,6 +9,12 @@ public static class JwtInjections
     {
 
         services.AddSingleton<JwtHandler>();
+        services.AddSingleton<JwtClaimsDecryptor>();
+
+        services.AddHttpClient<JwtService>(client =>
+        {
+            client.BaseAddress = new Uri(configuration["IdentityApi:BaseAddress"] ?? "http://localhost:5002");
+        });
 
         services.AddAuthentication(options =>
         {

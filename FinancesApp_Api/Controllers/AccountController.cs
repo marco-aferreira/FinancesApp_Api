@@ -26,27 +26,19 @@ public class AccountController(IQueryHandler<GetAccounts, IReadOnlyList<Account>
                                IQueryHandler<GetTransactionHistory, IReadOnlyList<AccountTransaction>> getTransactionHistoryHandler,
                                ICommandHandler<CreateAccount, bool> createAccountHandler,
                                ICommandHandler<ApplyDelta, ApplyDeltaResult> applyDeltaHandler,
-                               IConfiguration configuration) : ControllerBase
+                               JwtClaimsDecryptor jwtDecryptor) : ControllerBase
 {
 
 
     [HttpGet(AccountEndpoints.GetAccounts)]
     public async Task<IActionResult> GetAccounts(CancellationToken token = default)
     {
-        if (User.FindFirst("token_type")?.Value != "full")
-            return Unauthorized("Full authentication required.");
+        var jwt = jwtDecryptor.Decrypt(User, requiredTokenType: "full");
 
-        var encryptedUserId = User.FindFirst("userid_enc")?.Value;
-        if (string.IsNullOrEmpty(encryptedUserId))
-            return Unauthorized("Missing user identity.");
+        if (!jwt.IsValid)
+            return jwt.ToUnauthorizedResult();
 
-        var encryptionKey = configuration["ClaimEncryptionKey"]
-            ?? throw new InvalidOperationException("ClaimEncryptionKey not found in configuration.");
-
-        if (!Guid.TryParse(ClaimEncryption.Decrypt(encryptedUserId, encryptionKey), out var userId))
-            return Unauthorized("Invalid user identity.");
-
-        var query = new GetAccounts { UserId = userId };
+        var query = new GetAccounts { UserId = jwt.UserId };
         var accounts = await getAccountsHandler.Handle(query, token);
 
         return Ok(accounts);
@@ -58,6 +50,11 @@ public class AccountController(IQueryHandler<GetAccounts, IReadOnlyList<Account>
 
         if (!Guid.TryParse(accountId, out var accountGuid))
             return BadRequest("Invalid Id");
+
+        var jwtToken = jwtDecryptor.Decrypt(User, requiredTokenType: "full");
+
+        if (!jwtToken.AccountIds.Contains(accountGuid))
+            return Unauthorized();
 
         var query = new GetAccountById()
         {
@@ -79,7 +76,7 @@ public class AccountController(IQueryHandler<GetAccounts, IReadOnlyList<Account>
         var accounts = await getActiveAccountsHandler.Handle(query, token);
         return Ok(accounts);
     }
-
+    
     [HttpPost(AccountEndpoints.CreateAccount)]
     public async Task<IActionResult> CreateAccount([FromBody] CreateAccountRequest request, 
                                                     CancellationToken token = default)
@@ -105,6 +102,11 @@ public class AccountController(IQueryHandler<GetAccounts, IReadOnlyList<Account>
 
         if (!Guid.TryParse(request.AccountId, out var accountGuid))
             return BadRequest("Invalid Id");
+
+        var jwtToken = jwtDecryptor.Decrypt(User, requiredTokenType: "full");
+
+        if (!jwtToken.AccountIds.Contains(accountGuid))
+            return Unauthorized();
 
         var query = new GetAccountById()
         {
@@ -148,25 +150,17 @@ public class AccountController(IQueryHandler<GetAccounts, IReadOnlyList<Account>
                                                            [FromQuery] DateTimeOffset? to,
                                                            CancellationToken token = default)
     {
-        if (User.FindFirst("token_type")?.Value != "full")
-            return Unauthorized("Full authentication required.");
+        var jwt = jwtDecryptor.Decrypt(User, requiredTokenType: "full");
 
-        var encryptedUserId = User.FindFirst("userid_enc")?.Value;
-        if (string.IsNullOrEmpty(encryptedUserId))
-            return Unauthorized("Missing user identity.");
-
-        var encryptionKey = configuration["ClaimEncryptionKey"]
-            ?? throw new InvalidOperationException("ClaimEncryptionKey not found in configuration.");
-
-        if (!Guid.TryParse(ClaimEncryption.Decrypt(encryptedUserId, encryptionKey), out var userId))
-            return Unauthorized("Invalid user identity.");
+        if (!jwt.IsValid)
+            return jwt.ToUnauthorizedResult();
 
         if (from.HasValue && to.HasValue && from.Value > to.Value)
             return BadRequest("'from' must be earlier than or equal to 'to'.");
 
         var query = new GetTransactionHistory
         {
-            UserId = userId,
+            UserId = jwt.UserId,
             From = from,
             To = to
         };

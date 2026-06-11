@@ -10,7 +10,7 @@ namespace FinancesApp_Api.Jwt;
 public class TotpValidator(TotpService totpService,
                            IQueryHandler<GetActiveUserTotp, UserCredentialsTotp?> getActiveTotpHandler,
                            ICommandHandler<InvalidateTotpCredential, bool> invalidateTotpHandler,
-                           IConfiguration configuration,
+                           JwtClaimsDecryptor jwtDecryptor,
                            ILogger<TotpValidator> logger)
 {
     public async Task<TotpValidationResult> Validate(VerifyTwoFactorRequest request,
@@ -20,20 +20,11 @@ public class TotpValidator(TotpService totpService,
         if (string.IsNullOrWhiteSpace(request.TotpCode) || request.TotpCode.Length != 6)
             return new TotpValidationResult(TotpValidationStatus.InvalidCodeFormat);
 
-        var tokenType = user.FindFirst("token_type")?.Value;
-        if (tokenType != "partial")
-            return new TotpValidationResult(TotpValidationStatus.InvalidTokenType);
+        var jwt = jwtDecryptor.Decrypt(user, requiredTokenType: "partial");
+        if (!jwt.IsValid)
+            return new TotpValidationResult(MapDecryptionStatus(jwt.Status));
 
-        var encryptedUserId = user.FindFirst("userid_enc")?.Value;
-        if (string.IsNullOrEmpty(encryptedUserId))
-            return new TotpValidationResult(TotpValidationStatus.MissingUserIdentity);
-
-        var encryptionKey = configuration["ClaimEncryptionKey"]
-            ?? throw new InvalidOperationException("ClaimEncryptionKey not found in configuration.");
-
-        var decryptedUserId = ClaimEncryption.Decrypt(encryptedUserId, encryptionKey);
-        if (!Guid.TryParse(decryptedUserId, out var userGuid))
-            return new TotpValidationResult(TotpValidationStatus.InvalidUserId);
+        var userGuid = jwt.UserId;
 
         var activeTotp = await getActiveTotpHandler.Handle(
             new GetActiveUserTotp { UserId = userGuid }, token);
@@ -59,4 +50,11 @@ public class TotpValidator(TotpService totpService,
 
         return new TotpValidationResult(TotpValidationStatus.Valid, userGuid, activeTotp.Id);
     }
+
+    private static TotpValidationStatus MapDecryptionStatus(JwtDecryptionStatus status) => status switch
+    {
+        JwtDecryptionStatus.InvalidTokenType => TotpValidationStatus.InvalidTokenType,
+        JwtDecryptionStatus.MissingUserIdentity => TotpValidationStatus.MissingUserIdentity,
+        _ => TotpValidationStatus.InvalidUserId
+    };
 }
