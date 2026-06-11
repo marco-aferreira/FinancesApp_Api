@@ -38,6 +38,9 @@ public static class CredentialsModuleInjections
         services.AddScoped<ICommandHandler<TotpCredentialCreated, bool>, TotpCredentialCreatedHandler>();
         services.AddScoped<ICommandHandler<InvalidateTotpCredential, bool>, InvalidateTotpCredentialHandler>();
 
+        // Logout
+        services.AddScoped<ICommandHandler<LogoutUser, bool>, LogoutUserHandler>();
+
         // Projection rebuild
         services.AddScoped<ICommandHandler<RebuildCredentialsProjection, bool>, RebuildCredentialsProjectionHandler>();
 

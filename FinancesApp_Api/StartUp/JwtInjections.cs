@@ -1,4 +1,4 @@
-﻿using FinancesApp_Api.Jwt;
+﻿    using FinancesApp_Api.Jwt;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 
 namespace FinancesApp_Api.StartUp;
@@ -24,6 +24,13 @@ public static class JwtInjections
 
             options.Events = new JwtBearerEvents
             {
+                OnMessageReceived = context =>
+                {
+                    if (context.Request.Cookies.ContainsKey("X-Access-Token"))
+                        context.Token = context.Request.Cookies["X-Access-Token"];
+                    
+                    return Task.CompletedTask;
+                },
                 OnAuthenticationFailed = context =>
                 {
                     Console.WriteLine($"Authentication failed: {context.Exception.Message}");

@@ -35,9 +35,11 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
                                        ICommandHandler<DeleteUserCredentials, bool> deleteCredentialsHandler,
                                        ICommandHandler<TotpCredentialCreated, bool> createTotpHandler,
                                        ICommandHandler<InvalidateTotpCredential, bool> invalidateTotpHandler,
+                                       ICommandHandler<LogoutUser, bool> logoutHandler,
                                        ICommandHandler<RebuildCredentialsProjection, bool> rebuildProjectionHandler,
                                        TotpService totpService,
                                        TotpValidator totpValidator,
+                                       IConfiguration configuration,
                                        IS3ImageService s3ImageService) : ControllerBase
 {
 
@@ -66,7 +68,8 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         if (string.IsNullOrWhiteSpace(login))
             return BadRequest("Login cannot be empty");
 
-        var query = new GetUserCredentialsByLogin {
+        var query = new GetUserCredentialsByLogin
+        {
             Login = login
         };
 
@@ -116,7 +119,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
                                     QrCodeImage: $"data:image/png;base64,{totpResult.QrCodeBase64}")
         );
     }
-    
+
     [Authorize]
     [EnableRateLimiting(RateLimitingInjections.VerifyTotpPolicy)]
     [HttpPost(CredentialsEndpoints.VerifyTwoFactor)]
@@ -144,20 +147,61 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
             .Select(a => a.Id)
             .ToList();
 
-        var userQuery = new GetUserById { UserId = credentials.UserId};
+        var userQuery = new GetUserById { UserId = credentials.UserId };
         var user = await getUserByIdHandler.Handle(userQuery, token);
 
         string? profileImageUrl = null;
 
         if (!string.IsNullOrEmpty(user?.ProfileImage))
             profileImageUrl = await s3ImageService.GeneratePresignedUrlAsync(user.ProfileImage, token);
-        
+
         string fullToken = await GetUserFullAccessToken(validation, credentials, userAccountIds, token);
 
-        return Ok(new { Token = fullToken, TokenType = "full", ProfileImageUrl = profileImageUrl });
+        var cookieOptions = new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Strict,
+            Secure = true,
+            Expires = DateTimeOffset.UtcNow.AddMinutes(30)
+        };
+
+        Response.Cookies.Append("X-Access-Token", fullToken, cookieOptions);
+        Response.Cookies.Append("X-Username", user!.Name,  cookieOptions);
+        //Response.Cookies.Append("X-Refresh-Token", user.RefreshToken, cookieOptions);
+
+        return Ok(new { ProfileImageUrl = profileImageUrl });
     }
 
-   
+    [Authorize]
+    [HttpPost(CredentialsEndpoints.Logout)]
+    public async Task<IActionResult> Logout(CancellationToken token = default)
+    {
+        var encryptedUserId = User.FindFirst("userid_enc")?.Value;
+        if (string.IsNullOrEmpty(encryptedUserId))
+            return Unauthorized("Invalid token: missing user identity.");
+
+        var encryptionKey = configuration["ClaimEncryptionKey"]
+            ?? throw new InvalidOperationException("ClaimEncryptionKey not found in configuration.");
+
+        var decryptedUserId = ClaimEncryption.Decrypt(encryptedUserId, encryptionKey);
+        if (!Guid.TryParse(decryptedUserId, out var userGuid))
+            return BadRequest("Invalid UserId in token.");
+
+        await logoutHandler.Handle(new LogoutUser(userGuid), token);
+
+        var expiredCookie = new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Strict,
+            Secure = true,
+            Expires = DateTimeOffset.UnixEpoch
+        };
+
+        Response.Cookies.Delete("X-Access-Token", expiredCookie);
+        Response.Cookies.Delete("X-Username", expiredCookie);
+
+        return Ok();
+    }
 
     [HttpPost(CredentialsEndpoints.CreateCredentials)]
     public async Task<IActionResult> CreateCredentials([FromBody] CreateCredentialsRequest request,

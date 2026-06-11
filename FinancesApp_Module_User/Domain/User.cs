@@ -134,7 +134,6 @@ public class User : AggregateRoot
             case UserUpdatedEvent e:
                 Id = e.Id;
                 Name = e.Name;
-                ProfileImage = e.ProfileImage;
                 ModifiedAt = e.Timestamp;
                 break;
 

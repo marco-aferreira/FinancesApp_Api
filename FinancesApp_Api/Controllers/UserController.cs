@@ -94,7 +94,8 @@ public partial class UserController : ControllerBase
         byte[]? imageData = null;
         string? contentType = null;
 
-        if(Base64.IsValid(request.ProfileImage))
+        if(!string.IsNullOrEmpty(request.ProfileImage) 
+               && Base64.IsValid(request.ProfileImage))
         {
             imageData = Convert.FromBase64String(request.ProfileImage);
             contentType = "image/jpeg";
