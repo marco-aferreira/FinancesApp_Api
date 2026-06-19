@@ -46,6 +46,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
                                        IS3ImageService s3ImageService) : ControllerBase
 {
 
+    [Authorize(Policy = JwtInjections.FullTokenPolicy)]
     [HttpGet(CredentialsEndpoints.GetByUserId)]
     public async Task<IActionResult> GetByUserId([FromRoute] string userId, CancellationToken token = default)
     {
@@ -65,6 +66,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         return Ok(result);
     }
 
+    [Authorize(Policy = JwtInjections.FullTokenPolicy)]
     [HttpGet(CredentialsEndpoints.GetByLogin)]
     public async Task<IActionResult> GetByLogin([FromRoute] string login, CancellationToken token = default)
     {
@@ -155,8 +157,10 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         if (!string.IsNullOrEmpty(user?.ProfileImage))
             profileImageUrl = await s3ImageService.GeneratePresignedUrlAsync(user.ProfileImage, token);
 
-        string fullToken = await GetUserFullAccessToken(validation, credentials, userAccountIds, token);
-
+        string accessReference = await GetAccessReference(validation.UserId,
+                                                          credentials, 
+                                                          userAccountIds, 
+                                                          token);
         var cookieOptions = new CookieOptions
         {
             HttpOnly = true,
@@ -165,13 +169,14 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
             Expires = DateTimeOffset.UtcNow.AddMinutes(30)
         };
 
-        Response.Cookies.Append("X-Access-Token", fullToken, cookieOptions);
+        Response.Cookies.Append("X-Access-Token", accessReference, cookieOptions);
         Response.Cookies.Append("X-Username", user!.Name,  cookieOptions);
         //Response.Cookies.Append("X-Refresh-Token", user.RefreshToken, cookieOptions);
 
         return Ok(new { ProfileImageUrl = profileImageUrl });
     }
   
+    [Authorize(Policy = JwtInjections.FullTokenPolicy)]
     [HttpPost(CredentialsEndpoints.Logout)]
     public async Task<IActionResult> Logout(CancellationToken token = default)
     {
@@ -180,6 +185,15 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
             return jwt.ToUnauthorizedResult();
 
         await logoutHandler.Handle(new LogoutUser(jwt.UserId), token);
+
+        // Revoke the opaque session ref so it can't be exchanged again (also evicts the
+        // active-ref cache). Best-effort — a failure here must not block logout.
+        var sessionRef = Request.Cookies["X-Access-Token"];
+        if (!string.IsNullOrEmpty(sessionRef))
+        {
+            try { await jwtService.RevokeReference(sessionRef, token); }
+            catch (HttpRequestException) { /* Identity.Api unreachable — cookies are cleared below regardless */ }
+        }
 
         var expiredCookie = new CookieOptions
         {
@@ -194,6 +208,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
 
         return Ok();
     }
+
     [AllowAnonymous]
     [HttpPost(CredentialsEndpoints.CreateCredentials)]
     public async Task<IActionResult> CreateCredentials([FromBody] CreateCredentialsRequest request,
@@ -219,6 +234,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         return Ok(result);
     }
 
+    [Authorize(Policy = JwtInjections.FullTokenPolicy)]
     [HttpPut(CredentialsEndpoints.UpdateCredentials)]
     public async Task<IActionResult> UpdateCredentials([FromBody] UpdateCredentialsRequest request,
                                                        CancellationToken token = default)
@@ -240,6 +256,7 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
         return Ok("Credentials updated successfully");
     }
 
+    [Authorize(Policy = JwtInjections.FullTokenPolicy)]
     [HttpDelete(CredentialsEndpoints.DeleteCredentials)]
     public async Task<IActionResult> DeleteCredentials([FromRoute] string userId, CancellationToken token = default)
     {
@@ -275,14 +292,14 @@ public class UserCredentialsController(IQueryHandler<GetUserCredentialsByUserId,
     //    return Ok($"Projection rebuilt for user {userGuid}");
     //}
 
-    private async Task<string> GetUserFullAccessToken(TotpValidationResult validation,
-                                                      UserCredentials credentials,
-                                                      List<Guid> userAccountIds,
-                                                      CancellationToken token)
+    private async Task<string> GetAccessReference(Guid UserId,
+                                                  UserCredentials credentials,
+                                                  List<Guid> userAccountIds,
+                                                  CancellationToken token)
     {
-        return await jwtService.GenerateFullToken(new GenerateFullJwtRequest
+        return await jwtService.GetUserSessionToken(new GenerateFullJwtRequest
         {
-            UserId = validation.UserId,
+            UserId = UserId,
             Login = credentials.Email,
             AccountIds = userAccountIds,
             CustomClaims = new Dictionary<string, object>

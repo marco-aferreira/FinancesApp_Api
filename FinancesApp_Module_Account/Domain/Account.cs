@@ -27,9 +27,12 @@ public sealed class Account : AggregateRoot
     public Account(Guid id,
                    Guid userId,
                    Money balance,
-                   AccountType type) 
-        => Raise(new UpdatedAccountEvent(Guid.NewGuid(), DateTimeOffset.UtcNow, id, userId, balance, new Money(0m, balance.Currency), type));
-    
+                   AccountType type)
+    {
+        Raise(new UpdatedAccountEvent(Guid.NewGuid(), DateTimeOffset.UtcNow, id, userId, balance, new Money(0m, balance.Currency), type));
+        CalculateCreditLimit(Balance);
+    }
+
 
     public Account(Guid userId,
                    Money balance,
@@ -188,9 +191,9 @@ public sealed class Account : AggregateRoot
             throw new InvalidOperationException("Due date is not set for this credit card account.");
     }
 
-    private void RecalculateDebt()
+    private void RecalculateDebt(DateTimeOffset debtStarted)
     {
-        var daysPastDue = (DateTimeOffset.UtcNow - DueDate!.Value).Days;
+        var daysPastDue = (debtStarted - DueDate!.Value).Days;
         var interestRate = 0.05m;
         var interest = CurrentDebt.Amount * interestRate * daysPastDue;
 
@@ -226,8 +229,6 @@ public sealed class Account : AggregateRoot
                 if (ValidateInitialBalance(e.balance))
                     Balance = e.balance;
 
-                CalculateCreditLimit(Balance);
-
                 break;
 
             case DepositEvent e:
@@ -247,7 +248,7 @@ public sealed class Account : AggregateRoot
             case CalculatedCreditLimitEvent e:
 
                 CreditLimit = new Money(e.Value.Amount, e.Value.Currency);
-                SetCreditCardPaymentDates();
+                SetCreditCardPaymentDates(e.Timestamp);
                 break;
 
             case CreditUpdatedEvent e:
@@ -255,31 +256,30 @@ public sealed class Account : AggregateRoot
                 CurrentDebt = new Money(e.NewDebt.Amount, e.NewDebt.Currency);
                 break;
 
-            case AccountClosedEvent:
+            case AccountClosedEvent e:
 
                 Status = AccountStatus.Closed;
-                ClosedAt = DateTimeOffset.UtcNow;
+                ClosedAt = e.Timestamp;
                 break;
-
             
-            case DebtRecalculatedEvent:
+            case DebtRecalculatedEvent e:
 
-                RecalculateDebt();
+                RecalculateDebt(e.Timestamp);
                 break;
 
             case CredidCardStatementPaymentEvent e:
 
                 ValidateCreditCardDueDate();
 
-                if (DateTimeOffset.UtcNow > DueDate!.Value)
-                    RecalculateDebt();
+                if (e.Timestamp > DueDate!.Value)
+                    RecalculateDebt(e.Timestamp);
 
                 UpdateCredit(e.Amount, OperationType.Payment, raiseEvent: false);
 
                 if (CurrentDebt.IsZero)
-                    PayedAt = DateTimeOffset.UtcNow;
+                    PayedAt = e.Timestamp;
 
-                SetCreditCardPaymentDates(e.Timestamp);
+                SetCreditCardPaymentDates(e.Timestamp, payedAt: e.Timestamp);
 
                 break;
 
@@ -288,17 +288,17 @@ public sealed class Account : AggregateRoot
         }
     }
 
-    private void SetCreditCardPaymentDates(DateTimeOffset? payedAt = default)
+    private void SetCreditCardPaymentDates(DateTimeOffset reference, DateTimeOffset? payedAt = default)
     {
         if (Type != AccountType.CreditCard)
             return;
 
-        var now = DateTimeOffset.UtcNow;
-        
-        if(payedAt.HasValue)
+        if (payedAt.HasValue)
             PaymentDate = payedAt.Value;
 
-        DueDate = new DateTimeOffset(now.Year, now.Month == 12 ? 1 : now.Month + 1, 10, 23, 59, 59, now.Offset);
+        DueDate = new DateTimeOffset(reference.Month == 12 ? reference.Year + 1 : reference.Year,
+                                     reference.Month == 12 ? 1 : reference.Month + 1,
+                                     10, 23, 59, 59, reference.Offset);
     }
 
     private void UpdateCredit(Money delta, 

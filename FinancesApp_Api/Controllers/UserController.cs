@@ -16,7 +16,7 @@ namespace FinancesApp_Api.Contracts.Requests.UserRequests;
 [ApiController]
 [ApiVersion(ApiVersions.V1)]
 [ApiVersion(ApiVersions.V1_1)]
-[Authorize]
+[Authorize(Policy = JwtInjections.FullTokenPolicy)]
 public partial class UserController(IQueryHandler<GetUsers,
                       IReadOnlyList<User>> getUsersHandler,
                       IQueryHandler<GetUserById, User> getUserByIdHandler,

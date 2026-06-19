@@ -16,7 +16,7 @@ using Microsoft.AspNetCore.RateLimiting;
 
 namespace FinancesApp_Api.Controllers;
 
-[Authorize]
+[Authorize(Policy = JwtInjections.FullTokenPolicy)]
 [ApiController]
 [ApiVersion(ApiVersions.V1)]
 [ApiVersion(ApiVersions.V1_1)]

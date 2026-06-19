@@ -6,9 +6,12 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
         <DockerfileContext>..\FinancesApp_Api</DockerfileContext>
+        <UserSecretsId>1ef597db-0256-4494-8247-4334c2e05775</UserSecretsId>
     </PropertyGroup>
 
     <ItemGroup>
+        <PackageReference Include="AWSSDK.DynamoDBv2" Version="3.7.405" />
+        <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="9.0.0" />
         <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.4" />
         <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.16.0" />
     </ItemGroup>

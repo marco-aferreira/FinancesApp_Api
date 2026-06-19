@@ -3,16 +3,37 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 
-namespace FinancesApp_Api.Jwt;
+namespace Identity.Api.Handlers;
 
-public class JwtHandler
+public class TokenHandler
 {
     private readonly IConfiguration _configuration;
     private static string PublicKey { get; set; } = "";
-    public JwtHandler(IConfiguration configuration)
+    public TokenHandler(IConfiguration configuration)
     {
         _configuration = configuration;
-        PublicKey = _configuration["PublicKeyPath"] ?? throw new InvalidOperationException("Public key not found in configuration.");        
+        PublicKey = _configuration["PublicKeyPath"] ?? throw new InvalidOperationException("Public key not found in configuration.");
+    }
+    public ClaimsPrincipal? DecodeToken(string token)
+    {
+        TokenValidationParameters validationParams = GetTokenValidationParameters();
+
+        try
+        {
+            var handler = new JwtSecurityTokenHandler();
+            var principal = handler.ValidateToken(token, validationParams, out SecurityToken validatedToken);
+            return principal;
+        }
+        catch (SecurityTokenExpiredException)
+        {
+            Console.WriteLine("Token has expired.");
+            return null;
+        }
+        catch (SecurityTokenException ex)
+        {
+            Console.WriteLine($"Token invalid: {ex.Message}");
+            return null;
+        }
     }
 
     public TokenValidationParameters GetTokenValidationParameters()

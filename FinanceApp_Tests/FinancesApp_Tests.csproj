@@ -12,6 +12,7 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="FluentAssertions" Version="8.8.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.8" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="Moq" Version="4.20.72" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
@@ -21,6 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\FinancesApp_Api\FinancesApp_Api.csproj" />
     <ProjectReference Include="..\FinancesApp_Module_Account\FinancesApp_Module_Account.csproj" />
     <ProjectReference Include="..\FinancesApp_Module_Credentials\FinancesApp_Module_Credentials.csproj" />
     <ProjectReference Include="..\FinancesApp_Module_User\FinancesApp_Module_User.csproj" />

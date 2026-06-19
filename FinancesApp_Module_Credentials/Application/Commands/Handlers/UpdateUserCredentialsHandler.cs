@@ -1,12 +1,15 @@
 using FinancesApp_CQRS.Interfaces;
+using FinancesApp_Module_Credentials.Application.Repositories;
 using Microsoft.Extensions.Logging;
 using Prometheus;
 
 namespace FinancesApp_Module_Credentials.Application.Commands.Handlers;
 public class UpdateUserCredentialsHandler(IEventStore eventStore,
+                                          IUserCredentialsReadRepository readRepository,
                                           ILogger<UpdateUserCredentialsHandler> logger) : ICommandHandler<UpdateUserCredentials, bool>
 {
     private readonly IEventStore _eventStore = eventStore;
+    private readonly IUserCredentialsReadRepository _readRepository = readRepository;
     private readonly ILogger<UpdateUserCredentialsHandler> _logger = logger;
 
     private static readonly Counter CredentialsUpdated = Metrics
@@ -29,13 +32,21 @@ public class UpdateUserCredentialsHandler(IEventStore eventStore,
 
             try
             {
-                var events = await _eventStore.Load(command.UserId, token: cancellationToken);
+                // The credentials aggregate has its own stream — resolve its Id from the read model first.
+                var existing = await _readRepository.GetByUserIdAsync(command.UserId, token: cancellationToken);
+                if (existing.Id == Guid.Empty)
+                    return false;
+
+                var events = await _eventStore.Load(existing.Id, token: cancellationToken);
+                if (events.Count == 0)
+                    return false;
+
                 var credentials = new Domain.UserCredentials();
                 credentials.RebuildFromEvents(events);
 
                 credentials.ChangePassword(command.NewPlainPassword);
 
-                await _eventStore.Append(command.UserId, credentials.GetUncommittedEvents(), credentials.NextVersion, cancellationToken);
+                await _eventStore.Append(existing.Id, credentials.GetUncommittedEvents(), credentials.CurrentVersion, cancellationToken);
 
                 CredentialsUpdated.Inc();
 

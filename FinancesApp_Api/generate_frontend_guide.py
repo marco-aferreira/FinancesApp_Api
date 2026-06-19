@@ -122,13 +122,16 @@ def build():
         Paragraph('Frontend Development Guide', S['DocSubtitle']),
         Spacer(1, 0.15*inch),
         Paragraph('API Reference for Building the FinancesApp Frontend', S['DocMeta']),
-        Paragraph('Version 1.1 | Generated May 2026', S['DocMeta']),
+        Paragraph('Version 1.1 | Generated June 2026', S['DocMeta']),
         Spacer(1, 0.5*inch),
         HRFlowable(width='60%', thickness=1, color=BLUE_MID, hAlign='CENTER', spaceAfter=16),
         sub('Architecture Overview'),
-        body('Frontend (SPA) → FinancesApp_Api (Controllers, JWT) → Modules: User / Credentials / Account CQRS '
-             'Dispatcher + Event Store → Outbox Processor (BackgroundService) → Projections (read tables) '
-             'SQL Server (events + reads) | AWS S3 (profile images) | DynamoDB (image metadata) | Redis (cache)'),
+        body('Frontend (SPA) → AWS Gateway (API Gateway + Lambda authorizer, exchanges the opaque session '
+             'reference for a phantom JWT) → FinancesApp_Api (Controllers) → Modules: User / Credentials / '
+             'Account CQRS Dispatcher + Event Store → Outbox Processor (BackgroundService) → Projections '
+             '(read tables) SQL Server (events + reads) | AWS S3 (profile images) | DynamoDB (image metadata + '
+             'session references) | Redis (cache). Identity.Api is a separate microservice that mints session '
+             'references (/session) and exchanges them for JWTs (/exchange).'),
         PageBreak(),
     ]
 
@@ -144,8 +147,8 @@ def build():
         ['GET /api/v1.1/user/get/{userId}',
          'Returns { user, profileImageUrl } — a 1-minute pre-signed S3 GET URL, or null if no image.'],
         ['POST /api/v1.1/credentials/verify-2fa (updated)',
-         'Full JWT now delivered as HttpOnly cookie (X-Access-Token, SameSite=Strict). '
-         'Response body contains only { profileImageUrl }.'],
+         'Now uses the phantom-token model: X-Access-Token (HttpOnly, SameSite=Strict) holds an '
+         'OPAQUE SESSION REFERENCE, not a JWT. Response body contains only { profileImageUrl }.'],
         ['POST /api/v1.1/credentials/logout (new)',
          'Authenticated via X-Access-Token cookie. Invalidates any active TOTP for the user '
          'and clears X-Access-Token + X-Username cookies.'],
@@ -155,9 +158,10 @@ def build():
 
     story += section('1. What this API is about')
     story.append(body(
-        'FinancesApp is a personal-finance management API. JWT authentication via HttpOnly cookies '
-        '(set automatically after 2FA) and Bearer token for the partial-auth step. '
-        '.NET 8 modular monolith — three domains:'
+        'FinancesApp is a personal-finance management API. Authentication uses the <b>phantom-token '
+        'pattern</b>: after 2FA the client holds an <b>opaque session reference</b> in an HttpOnly cookie — '
+        'never a JWT. A gateway exchanges that reference for a short-lived JWT before the request reaches the '
+        'backend. The pre-2FA step still uses a partial Bearer token. .NET 8 modular monolith — three domains:'
     ))
     story.append(tbl([
         ['Domain', 'Responsibility'],
@@ -187,12 +191,32 @@ def build():
     # ─────────────────────────────────────────────
     # PAGE 3 — Section 3: Authentication
     # ─────────────────────────────────────────────
-    story += section('3. Authentication (two-step, TOTP-based)')
+    story += section('3. Authentication (two-step TOTP + phantom token)')
     story.append(body(
-        'Login is a two-step flow. Step 1 verifies the password → <b>partial JWT</b> + QR code. '
-        'Step 2 verifies the TOTP code → full JWT delivered as an <b>HttpOnly cookie</b> + profile image URL.'
+        'Login is a two-step flow. Step 1 verifies the password → <b>partial JWT</b> (Bearer) + QR code. '
+        'Step 2 verifies the TOTP code → an <b>opaque session reference</b> delivered as an HttpOnly cookie '
+        '+ profile image URL. <b>The client never receives or handles a JWT.</b>'
     ))
-    story.append(Spacer(1, 0.08*inch))
+    story.append(Spacer(1, 0.06*inch))
+    story.append(sub('Phantom-token model — what the frontend needs to know'))
+    story += [
+        bullet('After 2FA, the <font face="Courier">X-Access-Token</font> cookie holds an <b>opaque random '
+               'reference</b> — not a JWT. It carries no readable claims; treat it as a meaningless handle.'),
+        bullet('An <b>AWS gateway</b> (API Gateway + Lambda authorizer) sits in front of the backend. On each '
+               'call it takes the reference, calls Identity.Api <font face="Courier">/exchange</font> to get a '
+               'short-lived JWT (the "phantom token"), and forwards that JWT to FinancesApp_Api. The frontend '
+               'sees none of this.'),
+        bullet('Only the SHA-256 <b>hash</b> of the reference is stored server-side (in DynamoDB), like a '
+               'password. The raw reference lives only in the cookie.'),
+        bullet('For the frontend the mechanics are unchanged from a cookie-session: send requests with '
+               '<font face="Courier">credentials: \'include\'</font> and the browser attaches the cookie '
+               'automatically. You never parse, decode, or store the token yourself.'),
+    ]
+    story.append(note(
+        'The API Gateway + Lambda authorizer is being rolled out. The reference lifetime is 30 minutes; '
+        'when it expires or is revoked (logout), calls return 401 — route the user back to /login.'
+    ))
+    story.append(Spacer(1, 0.06*inch))
 
     story.append(sub('Step 1 — POST /api/v1.1/credentials/login'))
     story.append(body(
@@ -204,13 +228,13 @@ def build():
     story.append(body(
         'Send { totpCode } with <font face="Courier">Authorization: Bearer &lt;partialToken&gt;</font>. '
         'Returns <b>only { profileImageUrl }</b> in the response body. '
-        'The full JWT and username are delivered as <b>HttpOnly cookies</b> set by the server:'
+        'The session reference and username are delivered as <b>HttpOnly cookies</b> set by the server:'
     ))
     story.append(tbl([
-        ['Cookie',         'Value',          'Flags'],
-        ['X-Access-Token', 'Full JWT string', 'HttpOnly, SameSite=Strict'],
-        ['X-Username',     'User display name', 'HttpOnly, SameSite=Strict'],
-    ], [2.0*inch, 2.2*inch, 2.8*inch]))
+        ['Cookie',         'Value',                          'Flags'],
+        ['X-Access-Token', 'Opaque session reference (NOT a JWT)', 'HttpOnly, Secure, SameSite=Strict'],
+        ['X-Username',     'User display name',              'HttpOnly, Secure, SameSite=Strict'],
+    ], [1.9*inch, 2.5*inch, 2.6*inch]))
     story.append(body(
         'Cookies are sent automatically by the browser on all subsequent same-origin requests. '
         'For cross-origin, add <font face="Courier">credentials: \'include\'</font> to your fetch options.'
@@ -227,28 +251,34 @@ def build():
         '<font face="Courier">GET /user/get/{userId}</font> for a fresh URL.'
     ))
 
-    story.append(sub('Full JWT claims'))
+    story.append(sub('Phantom token claims (server-side only — never seen by the client)'))
+    story.append(body(
+        'For reference: the JWT the gateway mints from the session reference carries the claims below. '
+        'The frontend never receives this token, so these are documented for backend/gateway context only.'
+    ))
     story.append(tbl([
         ['Claim',                             'Value'],
         ['Issuer',                            'https://FinancesApp.com'],
         ['Audience',                          'https://FinancesAppCustomers.com'],
         ['Algorithm',                         'RS256'],
-        ['token_type',                        '"partial" after login, "full" after verify-2fa'],
-        ['userid_enc',                        'AES-encrypted user GUID (do not parse client-side)'],
-        ['role / 2fa_verified / AccountIds',  'Present only on the full token after successful TOTP verification.'],
+        ['token_type',                        '"partial" (login Bearer) or "full" (phantom token from /exchange)'],
+        ['userid_enc / sub_enc',              'AES-encrypted user GUID / login (server-side use only)'],
+        ['role / 2fa_verified / account_ids_enc', 'Present on the full phantom token after successful TOTP verification.'],
     ], cw_2col_wide))
 
     story.append(note(
-        'Note: profile image URL is not a JWT claim. It is returned as a separate top-level field in '
-        'the verify-2fa response body. This avoids embedding a short-lived URL inside a longer-lived token.'
+        'Note: profile image URL is neither a claim nor part of the reference. It is returned as a separate '
+        'top-level field in the verify-2fa response body, valid for 1 minute.'
     ))
 
     story.append(sub('Important rules'))
     story += [
         bullet('TOTP codes are <b>one-time</b>: invalidated after successful verify. New login → new QR code (re-pair each session).'),
         bullet('TOTP secrets expire after ~5 minutes. If too slow, restart from /login.'),
-        bullet('The <font face="Courier">x-api-key</font> header is an additional filter on selected endpoints. Not a replacement for JWT auth.'),
-        bullet('The full JWT is in an HttpOnly cookie — JavaScript cannot read it. Do not try to decode it client-side.'),
+        bullet('The <font face="Courier">x-api-key</font> header is an additional filter on selected endpoints. Not a replacement for the session reference.'),
+        bullet('The <font face="Courier">X-Access-Token</font> cookie is an <b>opaque reference</b>, not a JWT — '
+               'there is nothing to decode. JavaScript cannot read it (HttpOnly) and must not try to.'),
+        bullet('The reference is valid for <b>30 minutes</b>. On 401, send the user to /login to get a new one.'),
     ]
     story.append(PageBreak())
 
@@ -451,7 +481,7 @@ def build():
     story.append(PageBreak())
 
     story.append(sub('POST /api/v1.1/credentials/verify-2fa'))
-    story.append(body('Step 2: verify 6-digit TOTP, set full JWT as HttpOnly cookie, return profile image URL'))
+    story.append(body('Step 2: verify 6-digit TOTP, set opaque session reference as HttpOnly cookie, return profile image URL'))
     story.append(tbl([
         ['Auth',       'Authorization: Bearer <partialToken>'],
         ['Rate limit', '5 req / 30s per user'],
@@ -471,10 +501,10 @@ def build():
     ))
     story.append(body('<b>200 Cookies set</b>'))
     story.append(tbl([
-        ['Cookie',         'Content',           'Flags'],
-        ['X-Access-Token', 'Full JWT',           'HttpOnly, SameSite=Strict'],
-        ['X-Username',     'User display name',  'HttpOnly, SameSite=Strict'],
-    ], [2.0*inch, 2.0*inch, 3.0*inch]))
+        ['Cookie',         'Content',                     'Flags'],
+        ['X-Access-Token', 'Opaque session reference',     'HttpOnly, Secure, SameSite=Strict, 30 min'],
+        ['X-Username',     'User display name',            'HttpOnly, Secure, SameSite=Strict'],
+    ], [1.9*inch, 2.3*inch, 2.8*inch]))
     story.append(note(
         'profileImageUrl is a direct S3 HTTPS URL — use it as an image src with no extra headers. '
         'It expires in 1 minute. After expiry, call GET /user/get/{userId} for a fresh one.'
@@ -489,12 +519,12 @@ def build():
 
     story.append(sub('POST /api/v1.1/credentials/logout  NEW in 1.1'))
     story.append(body(
-        'Sign the user out. Reads the JWT from the <font face="Courier">X-Access-Token</font> HttpOnly '
-        'cookie, invalidates any active TOTP for the user (server-side, event-sourced), and clears '
-        'both auth cookies.'
+        'Sign the user out. Identifies the user from the <font face="Courier">X-Access-Token</font> HttpOnly '
+        'cookie (the gateway resolves the session reference to a JWT before the backend sees it), invalidates '
+        'any active TOTP for the user (server-side, event-sourced), and clears both auth cookies.'
     ))
     story.append(tbl([
-        ['Auth',   'Cookie: X-Access-Token (full or partial JWT)'],
+        ['Auth',   'Cookie: X-Access-Token (session reference)'],
         ['Body',   'None'],
         ['Status', 'Body / Notes'],
         ['200',    'Empty body. X-Access-Token and X-Username cookies are cleared (expired).'],
@@ -577,8 +607,9 @@ def build():
     story += section('8. Account endpoints')
     story.append(body(
         '<b>Base route:</b> <font face="Courier">/api/v1.1/accounts</font>  '
-        '<b>Auth:</b> Bearer JWT required (sent automatically via X-Access-Token cookie). '
-        'GetAccounts and GetTransactionHistory require the <i>full</i> token (post-2FA).'
+        '<b>Auth:</b> authenticated session required — the X-Access-Token cookie (session reference) is sent '
+        'automatically and the gateway turns it into a full phantom token. '
+        'GetAccounts and GetTransactionHistory require the <i>full</i> (post-2FA) token.'
     ))
 
     story.append(sub('Account object schema'))
@@ -800,7 +831,7 @@ def build():
     story += [
         bullet('Sign-up: <font face="Courier">POST /user/create</font>, then <font face="Courier">POST /credentials</font> with the same email.'),
         bullet('Login step 1: <font face="Courier">POST /credentials/login</font> — store partial token in memory, render QR.'),
-        bullet('Login step 2: <font face="Courier">POST /credentials/verify-2fa</font> — full JWT set as HttpOnly cookie automatically. '
+        bullet('Login step 2: <font face="Courier">POST /credentials/verify-2fa</font> — opaque session reference set as HttpOnly cookie automatically. '
                'Use <b>profileImageUrl</b> from the response body to display the avatar immediately.'),
         bullet('Dashboard: <font face="Courier">GET /accounts</font> for balances, <font face="Courier">GET /accounts/transactions</font> for activity feed.'),
         bullet('Account detail: <font face="Courier">GET /accounts/{accountId}</font>.'),
@@ -830,10 +861,11 @@ def build():
         bullet('Credit card fields are backend-computed. Display only, do not edit directly.'),
         bullet('Read endpoints eventually consistent (~500ms). Re-fetch after writes.'),
         bullet('TOTP regenerates every login — user re-pairs each session.'),
-        bullet('<font face="Courier">userid_enc</font> is opaque — do not parse it.'),
-        bullet('The full JWT is delivered as an <b>HttpOnly cookie (X-Access-Token)</b> — JavaScript cannot '
-               'read it. The browser sends it automatically on all subsequent requests. '
-               'Do <b>not</b> try to store or manage the full JWT in JavaScript.'),
+        bullet('Auth is <b>phantom-token</b>: the client holds an opaque session reference, never a JWT. '
+               'A gateway exchanges the reference for a short-lived JWT before the backend sees the request.'),
+        bullet('The session reference is delivered as an <b>HttpOnly cookie (X-Access-Token)</b> — JavaScript '
+               'cannot read it and there is nothing to decode. The browser sends it automatically on every '
+               'request. Do <b>not</b> try to store, parse, or manage any token in JavaScript.'),
         bullet('For cross-origin requests, add <font face="Courier">credentials: \'include\'</font> to your fetch/XHR options.'),
         bullet('<font face="Courier">profileImageUrl</font> expires in 1 min. Re-call GET /user/get/{userId} to refresh.'),
     ]
@@ -852,7 +884,7 @@ def build():
         '  headers.set("Accept", `application/json;api-version=${API_VERSION}`);\n'
         '  // For the partial-auth step, set the Authorization header explicitly:\n'
         '  // headers.set("Authorization", `Bearer ${partialToken}`);\n'
-        '  // After verify-2fa, the full JWT travels as the X-Access-Token cookie — no header needed.\n'
+        '  // After verify-2fa, the opaque session reference travels as the X-Access-Token cookie — no header needed.\n'
         '  if (init.body && !headers.has("Content-Type"))\n'
         '    headers.set("Content-Type", "application/json");\n'
         '\n'
@@ -879,7 +911,7 @@ def build():
         '  })).json();\n'
         'renderQrCode(qrCodeImage);\n'
         '\n'
-        '// Step 2: verify-2fa — full JWT set as cookie automatically\n'
+        '// Step 2: verify-2fa — opaque session reference set as cookie automatically\n'
         'const { profileImageUrl } =\n'
         '  await (await fetch(`${BASE_URL}/api/v1.1/credentials/verify-2fa`, {\n'
         '    method:      "POST",\n'
@@ -890,7 +922,7 @@ def build():
         '    body:        JSON.stringify({ totpCode }),\n'
         '    credentials: "include",\n'
         '  })).json();\n'
-        '// X-Access-Token cookie is now set — no token to store in JS\n'
+        '// X-Access-Token cookie (opaque reference) is now set — no token to store in JS\n'
         'if (profileImageUrl) showAvatar(profileImageUrl);\n'
         '\n'
         '// All subsequent requests — cookie sent automatically:\n'

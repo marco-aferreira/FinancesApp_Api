@@ -151,3 +151,6 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+// Exposed so the test host (WebApplicationFactory) can reference the entry-point assembly.
+public partial class Program { }

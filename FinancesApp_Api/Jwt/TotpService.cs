@@ -27,9 +27,9 @@ public class TotpService(ILogger<TotpService> logger)
         var secretBytes = Base32Encoding.ToBytes(base32Secret);
         var totp = new Totp(secretBytes, totpSize: 6);
         var expected = totp.ComputeTotp();
-        var result = totp.VerifyTotp(totpCode, out var step, new VerificationWindow(previous: 2, future: 1));
+        var result = totp.VerifyTotp(totpCode, out var step, new VerificationWindow(previous: 4, future: 4));
         logger.LogInformation("[TotpService] Expected={Expected} | Got={Got} | StepMatched={Step} | ServerUtc={ServerUtc} | Result={Result}",
-            expected, totpCode, step, DateTime.UtcNow, result);
+            expected, totpCode, step, DateTimeOffset.UtcNow, result);
         return result;
     }
 }

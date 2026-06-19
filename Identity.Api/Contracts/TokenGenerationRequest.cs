@@ -1,4 +1,4 @@
-namespace Identity.Api;
+namespace Identity.Api.Contracts;
 
 public enum TokenType { Partial, Full }
 

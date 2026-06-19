@@ -36,7 +36,7 @@ public class RegisterUserCredentialsHandlerTests
         // Assert
         result.Should().NotBe(Guid.Empty);
         await _mockEventStore.Received(1).Append(
-            credentials.UserId,
+            credentials.Id,
             Arg.Any<IReadOnlyList<IDomainEvent>>(),
             credentials.CurrentVersion,
             Arg.Any<CancellationToken>());
@@ -78,7 +78,7 @@ public class RegisterUserCredentialsHandlerTests
 
         // Assert
         await _mockEventStore.Received(1).Append(
-            credentials.UserId,
+            credentials.Id,
             Arg.Any<IReadOnlyList<IDomainEvent>>(),
             credentials.CurrentVersion,
             cancellationToken);
